@@ -1,32 +1,10 @@
 #include "llvm/Analysis/CGSCCPassManager.h"
 #define DEBUG_TYPE "loop-peel-with-state"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/LoopAnalysisManager.h"
-#include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Demangle/Demangle.h"
-#include "llvm/IR/DebugInfo.h"
-#include "llvm/IR/Dominators.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/PassManager.h"
-#include "llvm/IR/Value.h"
-#include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
-#include "llvm/Transforms/Utils/LoopUtils.h"
-
-#include <set>
-#include <vector>
 
 namespace llvm {
 
@@ -39,8 +17,8 @@ public:
                         LoopStandardAnalysisResults &AR, LPMUpdater &U);
 
 private:
-  bool hasStateVariables(Loop &L);
-  bool isDerivedFromIndVar(Value *DerivedValue, Loop &L);
+  bool hasStateVariables(Loop &L, ScalarEvolution *SE);
+  bool isDerivedFromIndVar(Value *DerivedValue, Loop &L, ScalarEvolution *SE);
 };
 
 } // namespace llvm
@@ -137,34 +115,41 @@ PreservedAnalyses LoopPeelWithStatePass::run(Loop &L, LoopAnalysisManager &AM,
   if (!L.isLoopSimplifyForm() || !L.getExitingBlock())
     return PreservedAnalyses::all();
 
-  if (!hasStateVariables(L))
+  ScalarEvolution *SE = &AR.SE;
+
+  if (!hasStateVariables(L, SE))
     return PreservedAnalyses::all();
 
   ValueToValueMapTy VM;
-  if (!peelLoop(&L, 1, false, &AR.LI, &AR.SE, AR.DT, &AR.AC, true, VM))
+  if (!peelLoop(&L, 1, false, &AR.LI, SE, AR.DT, &AR.AC, true, VM))
     return PreservedAnalyses::all();
 
   return PreservedAnalyses::none();
 }
 
-bool LoopPeelWithStatePass::hasStateVariables(Loop &L) {
+bool LoopPeelWithStatePass::hasStateVariables(Loop &L, ScalarEvolution *SE) {
   BasicBlock *Header = L.getHeader();
   BasicBlock *Latch = L.getLoopLatch();
+  if (!Header || !Latch)
+    return false;
 
-  Value *IndVar = L.getCanonicalInductionVariable();
-  if (!IndVar)
+  Value *IV = L.getCanonicalInductionVariable();
+  if (!IV)
     return false;
 
   for (PHINode &Phi : Header->phis()) {
     if (Phi.getBasicBlockIndex(Latch) < 0)
       continue;
-    if (&Phi == IndVar)
+
+    InductionDescriptor ID;
+    if (InductionDescriptor::isInductionPHI(&Phi, &L, SE, ID)) {
       continue;
+    }
 
     Value *LatchValue = Phi.getIncomingValueForBlock(Latch);
 
-    if (isDerivedFromIndVar(LatchValue, L)) {
-      LLVM_DEBUG(printDebugInfo(L, *IndVar, Phi, *LatchValue));
+    if (isDerivedFromIndVar(LatchValue, L, SE)) {
+      LLVM_DEBUG(printDebugInfo(L, *IV, Phi, *LatchValue));
       return true;
     }
   }
@@ -172,29 +157,18 @@ bool LoopPeelWithStatePass::hasStateVariables(Loop &L) {
   return false;
 }
 
-bool LoopPeelWithStatePass::isDerivedFromIndVar(Value *DerivedValue, Loop &L) {
-  Value *IndVar = L.getCanonicalInductionVariable();
-  if (!IndVar || !DerivedValue)
+bool LoopPeelWithStatePass::isDerivedFromIndVar(Value *DerivedValue, Loop &L,
+                                                ScalarEvolution *SE) {
+  if (!DerivedValue || !SE->isSCEVable(DerivedValue->getType()))
     return false;
 
-  if (DerivedValue == IndVar)
-    return true;
+  const SCEV *S = SE->getSCEV(DerivedValue);
+  auto *AddRec = dyn_cast<SCEVAddRecExpr>(S);
 
-  Value *V = DerivedValue;
-  int I = 0;
-  while (auto *CI = dyn_cast<Instruction>(V)) {
-    V = CI->getOperand(0);
-    if (!V)
-      return false;
-    if (V == IndVar)
-      return true;
-    if (V == DerivedValue)
-      return false;
-    if (I++ == 100)
-      return false;
-  }
+  if (!AddRec || AddRec->getLoop() != &L || !AddRec->isAffine())
+    return false;
 
-  return false;
+  return true;
 }
 
 PassPluginLibraryInfo getLoopPeelWithStatePluginInfo() {
