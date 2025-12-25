@@ -1,20 +1,32 @@
 # loop-peel-with-state
 ## How to build
-To build this project you need to build or install llvm first.
+You first need an LLVM installation (or your own build from source).
 
-*Only version of llvm plugin was tested with is 22.0.0.*
+**Note:** This plugin has only been tested with LLVM 22.0.0.
 
-Then to build
+Configure the project:
 ```
-cmake -S . -B build -DLLVM_DIR=/path/to/your/lib/cmake/llvm
+cmake -S . -B build -DLLVM_DIR=/path/to/lib/cmake/llvm
 ```
+Build it:
 ```
 cmake --build build
 ```
-*If you built llvm from source, then "your" in path would be **build** dir.*
+If you built LLVM from source, `/path/to/lib/cmake/llvm` is located inside your LLVM build directory.
 ## How to use
-To use plugin with clang
+Load the pass into Clang:
 ```
 clang -fpass-plugin=/path/to/LoopPeelWithState.so
 ```
-Plugin will be at the loop-peel-with-state/build/ dir by default.
+By default the shared library appears in `loop-peel-with-state/build/`
+## Debugging
+To see debug output you must compile LLVM with
+```
+-DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=ON
+```
+Then invoke Clang as follows:
+```
+clang -fpass-plugin=$PWD/build/LoopPeelWithState.so \
+      -mllvm -debug-only=loop-peel-with-state …
+```
+If you also need the source code to be printed, add the -g option as well.
