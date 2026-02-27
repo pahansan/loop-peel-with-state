@@ -3,7 +3,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 
 namespace llvm {
@@ -121,8 +121,7 @@ PreservedAnalyses LoopPeelWithStatePass::run(Loop &L, LoopAnalysisManager &AM,
     return PreservedAnalyses::all();
 
   ValueToValueMapTy VM;
-  if (!peelLoop(&L, 1, false, &AR.LI, SE, AR.DT, &AR.AC, true, VM))
-    return PreservedAnalyses::all();
+  peelLoop(&L, 1, false, &AR.LI, SE, AR.DT, &AR.AC, true, VM);
 
   return PreservedAnalyses::none();
 }
